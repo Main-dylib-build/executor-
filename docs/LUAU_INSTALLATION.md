@@ -1,103 +1,86 @@
-# Luau Installation Guide
+# Luau Source Integration Guide
 
-This project uses Luau (Roblox's Lua implementation) libraries for script execution. 
+This project directly compiles Luau (Roblox's Lua implementation) from source files. The build system is set up to use the Luau VM source code directly rather than pre-built libraries.
 
-## Required Files
+## Required Directory Structure
 
-You need to have the following Luau files installed:
-
-1. **Header Files**:
-   - `lua.h`
-   - `luaconf.h`
-   - `lualib.h`
-   - `lauxlib.h`
-
-2. **Library Files**:
-   - `libLuau.VM.a` or `Luau.VM.a` (required)
-   - `libLuau.Compiler.a` or `Luau.Compiler.a` (optional)
-
-## Default Location
-
-By default, the build system looks for Luau files in these locations:
+You need to have the Luau source code in the following structure:
 
 ```
 external/luau/
-├── VM/
-│   └── include/
-│       ├── lua.h
-│       ├── luaconf.h
-│       ├── lualib.h
-│       └── lauxlib.h
-└── build/
-    ├── libLuau.VM.a (or Luau.VM.a)
-    └── libLuau.Compiler.a (or Luau.Compiler.a)
+└── VM/
+    ├── include/
+    │   ├── lua.h
+    │   ├── luaconf.h
+    │   └── lualib.h
+    └── src/
+        ├── lapi.cpp
+        ├── lbaselib.cpp
+        ├── ltable.cpp
+        └── ... (other source files)
 ```
 
-## Installing Luau
+## Getting the Luau Source Code
 
-If you don't already have Luau installed, you can build it from source:
+The easiest way to set up Luau is to clone the repository:
 
 ```bash
-# Clone the repository
-git clone https://github.com/Roblox/luau.git
-cd luau
+# Create the external directory
+mkdir -p external
 
-# Create build directory
-mkdir build && cd build
-
-# Configure and build
-cmake .. -DCMAKE_BUILD_TYPE=Release -DLUAU_BUILD_TESTS=OFF
-cmake --build . --target Luau.VM Luau.Compiler
+# Clone Luau repository
+git clone https://github.com/Roblox/luau.git external/luau
 ```
 
-Then place the files in the expected locations:
+That's it! The build system will:
+1. Locate the VM/include and VM/src directories
+2. Compile all .cpp files in the VM/src directory
+3. Link directly against the compiled Luau VM
+
+## Custom Location for Luau Source
+
+If you want to use a different location for the Luau source code, you can specify it when running CMake:
 
 ```bash
-# Create directories
-mkdir -p external/luau/VM/include
-mkdir -p external/luau/build
-
-# Copy headers
-cp luau/VM/include/*.h external/luau/VM/include/
-
-# Copy libraries
-cp luau/build/libLuau.VM.a external/luau/build/
-cp luau/build/libLuau.Compiler.a external/luau/build/
+cmake -DLUAU_VM_DIR=/path/to/luau/VM ..
 ```
 
-## Custom Locations
+## Continuous Integration (CI)
 
-If your Luau files are in a different location, you can specify the paths when running CMake:
+For GitHub Actions and other CI systems, the build system will automatically:
+1. Check if the Luau repository exists
+2. Clone it from GitHub if needed
+3. Use the cloned source files for compilation
 
-```bash
-cmake \
-  -DLUAU_ROOT=/path/to/luau \
-  -DLUAU_INCLUDE_DIR=/path/to/luau/VM/include \
-  -DLUAU_VM_LIBRARY=/path/to/luau/build/libLuau.VM.a \
-  ..
-```
+This way, CI builds will always have access to the Luau source code without any manual setup.
 
 ## Troubleshooting
 
-### Missing Headers Error
+### VM Directory Not Found
 
 If you get an error like:
 ```
-Luau headers not found at /path/to/include
+Luau VM directory not found at /path/to/luau/VM
 ```
 
 Make sure:
-1. The header files exist in the specified directory
-2. Set the correct path with `-DLUAU_INCLUDE_DIR=/correct/path/to/headers`
+1. You have cloned the Luau repository to the expected location
+2. The VM directory exists within the repository
+3. Set the correct path with `-DLUAU_VM_DIR=/correct/path/to/luau/VM`
 
-### Missing Library Error
+### Header Files Not Found
 
 If you get an error like:
 ```
-Luau VM library not found at /path/to/library
+Luau header files not found at /path/to/luau/VM/include
 ```
 
 Make sure:
-1. The library file exists in the specified directory
-2. Check if the library has a different name (e.g., `Luau.VM.a` instead of `libLuau.VM.a`)
-3. Set the correct path with `-DLUAU_VM_LIBRARY=/correct/path/to/library`
+1. The include directory exists in the VM folder
+2. The header files (lua.h, etc.) are present in that directory
+
+### Source Files Not Found
+
+If you get an error about missing source files, verify that:
+1. The src directory exists in the VM folder
+2. The .cpp files are present in that directory

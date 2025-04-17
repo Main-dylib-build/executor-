@@ -29,12 +29,9 @@ option(ENABLE_ADVANCED_BYPASS "Enable advanced bypass features" ON)
 option(BUILD_TESTING "Build tests" OFF)
 option(BUILD_DOCS "Build documentation" OFF)
 
-# Luau paths configuration
-# These can be overridden when calling CMake with -DLUAU_ROOT=path, etc.
-set(LUAU_ROOT "${CMAKE_SOURCE_DIR}/external/luau" CACHE PATH "Root directory of Luau installation")
-set(LUAU_INCLUDE_DIR "${LUAU_ROOT}/VM/include" CACHE PATH "Directory containing Luau headers")
-set(LUAU_VM_LIBRARY "${LUAU_ROOT}/build/libLuau.VM.a" CACHE FILEPATH "Path to Luau VM library")
-set(LUAU_COMPILER_LIBRARY "${LUAU_ROOT}/build/libLuau.Compiler.a" CACHE FILEPATH "Path to Luau Compiler library (optional)")
+# Path to the Luau source files (the VM folder directly)
+set(LUAU_ROOT "${CMAKE_SOURCE_DIR}/external/luau" CACHE PATH "Root directory of Luau source code")
+set(LUAU_VM_DIR "${LUAU_ROOT}/VM" CACHE PATH "Directory containing Luau VM source code")
 
 # Platform-specific settings
 if(APPLE)
@@ -81,68 +78,60 @@ if(USE_DOBBY)
     add_definitions(-DUSE_DOBBY=1)
 endif()
 
-# Use pre-installed Luau libraries
-message(STATUS "Using pre-installed Luau libraries")
+# Build Luau directly from source files
+message(STATUS "Using Luau source files from ${LUAU_VM_DIR}")
 
-# Define paths to Luau files (user can override these)
-if(NOT DEFINED LUAU_ROOT)
-    set(LUAU_ROOT "${CMAKE_SOURCE_DIR}/external/luau" CACHE PATH "Root directory of Luau installation")
+# Check if VM directory exists
+if(NOT EXISTS "${LUAU_VM_DIR}")
+    message(FATAL_ERROR "Luau VM directory not found at ${LUAU_VM_DIR}. Please set LUAU_VM_DIR to the VM folder.")
 endif()
 
-if(NOT DEFINED LUAU_INCLUDE_DIR)
-    set(LUAU_INCLUDE_DIR "${LUAU_ROOT}/VM/include" CACHE PATH "Directory containing Luau headers")
+# Check for include directory and key header file
+set(LUAU_INCLUDE_DIR "${LUAU_VM_DIR}/include")
+if(NOT EXISTS "${LUAU_INCLUDE_DIR}/lua.h")
+    message(FATAL_ERROR "Luau header files not found at ${LUAU_INCLUDE_DIR}. Expected lua.h in this directory.")
 endif()
 
-if(NOT DEFINED LUAU_VM_LIBRARY)
-    # Try common library names
-    foreach(LIB_PATH 
-        "${LUAU_ROOT}/build/libLuau.VM.a"
-        "${LUAU_ROOT}/build/Luau.VM.a"
-    )
-        if(EXISTS "${LIB_PATH}")
-            set(LUAU_VM_LIBRARY "${LIB_PATH}" CACHE FILEPATH "Path to Luau VM library")
-            break()
-        endif()
-    endforeach()
+# Check for source files
+set(LUAU_SRC_DIR "${LUAU_VM_DIR}/src")
+if(NOT EXISTS "${LUAU_SRC_DIR}/lapi.cpp")
+    message(FATAL_ERROR "Luau source files not found at ${LUAU_SRC_DIR}. Expected lapi.cpp and other files in this directory.")
 endif()
 
-# Set LUA variables for compatibility with rest of the build
+# Define the Luau VM source files directly
+file(GLOB LUAU_VM_SOURCES "${LUAU_SRC_DIR}/*.cpp")
+list(LENGTH LUAU_VM_SOURCES LUAU_VM_SOURCE_COUNT)
+message(STATUS "Found ${LUAU_VM_SOURCE_COUNT} Luau VM source files")
+
+# Define include and LUA variables for compatibility
 set(LUA_INCLUDE_DIR "${LUAU_INCLUDE_DIR}")
-set(LUA_LIBRARY "${LUAU_VM_LIBRARY}")
-set(LUA_LIBRARIES "${LUAU_VM_LIBRARY}")
 
-# Verify files exist
-message(STATUS "Checking Luau files:")
-message(STATUS "  Include directory: ${LUA_INCLUDE_DIR}")
-message(STATUS "  Library: ${LUA_LIBRARY}")
-
-# Create imported target for Luau VM
-add_library(luau_vm STATIC IMPORTED)
+# Build the Luau VM library directly from source
+add_library(luau_vm STATIC ${LUAU_VM_SOURCES})
+target_include_directories(luau_vm PUBLIC
+    ${LUAU_INCLUDE_DIR}
+    ${LUAU_SRC_DIR}
+)
 set_target_properties(luau_vm PROPERTIES
-    IMPORTED_LOCATION "${LUAU_VM_LIBRARY}"
-    INTERFACE_INCLUDE_DIRECTORIES "${LUAU_INCLUDE_DIR}"
+    POSITION_INDEPENDENT_CODE ON
+    LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib"
 )
 
-# Create compatibility alias
+# Create compatibility aliases
 add_library(Lua::lua ALIAS luau_vm)
+set(LUA_LIBRARIES luau_vm)
 
 # Create Lua interface library
 add_library(lua_bundled INTERFACE)
 target_include_directories(lua_bundled INTERFACE ${LUA_INCLUDE_DIR})
-target_link_libraries(lua_bundled INTERFACE Lua::lua)
+target_link_libraries(lua_bundled INTERFACE luau_vm)
 
-# Add include directories for easier access
+# Add include directories
 include_directories(${LUA_INCLUDE_DIR})
 
-# Log information about Luau configuration
-message(STATUS "Luau configuration:")
-message(STATUS "  Include Directory: ${LUA_INCLUDE_DIR}")
-message(STATUS "  VM Library: ${LUA_LIBRARY}")
-if(EXISTS "${LUAU_COMPILER_LIBRARY}")
-  message(STATUS "  Compiler Library: ${LUAU_COMPILER_LIBRARY}")
-else()
-  message(STATUS "  Compiler Library: Not found (optional)")
-endif()
+message(STATUS "Configured Luau VM to build from source")
+message(STATUS "  Include directory: ${LUAU_INCLUDE_DIR}")
+message(STATUS "  Source directory: ${LUAU_SRC_DIR}")
 
 # Add Luau compiler definitions
 add_definitions(-DUSE_LUAU=1)
@@ -152,97 +141,24 @@ add_definitions(-DLUAU_FASTINT_SUPPORT=1)
 add_subdirectory(source/cpp)
 add_subdirectory(source)
 
-# For CI builds only - create placeholder directories and files
-if(DEFINED ENV{CI} OR DEFINED ENV{GITHUB_ACTIONS})
-    message(STATUS "CI build detected, creating placeholder Luau files for CI")
+# For CI builds, clone the Luau repo if needed
+if(DEFINED ENV{CI})
+    message(STATUS "CI build detected, fetching Luau source files")
     
-    # Create directories if they don't exist
-    file(MAKE_DIRECTORY ${LUAU_INCLUDE_DIR})
-    file(MAKE_DIRECTORY ${CMAKE_BINARY_DIR}/luau_lib)
+    # Create parent directories
+    file(MAKE_DIRECTORY ${CMAKE_SOURCE_DIR}/external)
     
-    # Create minimal header files for compilation
-    file(WRITE "${LUAU_INCLUDE_DIR}/lua.h" "
-    #ifndef LUA_H
-    #define LUA_H
-    #include <stddef.h>
-    #define LUA_API extern
-    typedef struct lua_State lua_State;
-    typedef int (*lua_CFunction)(lua_State* L);
-    LUA_API lua_State* lua_newstate(void* f, void* ud);
-    LUA_API void lua_close(lua_State* L);
-    #define LUA_TNONE (-1)
-    #define LUA_TNIL 0
-    #define LUA_TNUMBER 3
-    #define LUA_TSTRING 4
-    #define LUA_TBOOLEAN 1
-    #define LUA_TVECTOR 10 
-    #endif
-    ")
-    
-    file(WRITE "${LUAU_INCLUDE_DIR}/lauxlib.h" "
-    #ifndef LAUXLIB_H
-    #define LAUXLIB_H
-    #include \"lua.h\"
-    #define LUALIB_API LUA_API
-    LUALIB_API lua_State* luaL_newstate(void);
-    #endif
-    ")
-    
-    file(WRITE "${LUAU_INCLUDE_DIR}/lualib.h" "
-    #ifndef LUALIB_H
-    #define LUALIB_H
-    #include \"lua.h\"
-    LUALIB_API int luaopen_base(lua_State* L);
-    #endif
-    ")
-    
-    file(WRITE "${LUAU_INCLUDE_DIR}/luaconf.h" "
-    #ifndef LUACONF_H
-    #define LUACONF_H
-    #endif
-    ")
-    
-    # Create a simple empty library file for linking
-    set(LUAU_VM_LIBRARY "${CMAKE_BINARY_DIR}/luau_lib/libLuau.VM.a")
-    file(WRITE "${CMAKE_BINARY_DIR}/luau_lib/empty.c" "
-    // Stub Luau functions
-    #include <stdlib.h>
-    typedef struct lua_State lua_State;
-    lua_State* lua_newstate(void* f, void* ud) { return NULL; }
-    void lua_close(lua_State* L) {}
-    lua_State* luaL_newstate(void) { return NULL; }
-    int luaopen_base(lua_State* L) { return 0; }
-    ")
-    
-    execute_process(
-        COMMAND ${CMAKE_C_COMPILER} -c "${CMAKE_BINARY_DIR}/luau_lib/empty.c" -o "${CMAKE_BINARY_DIR}/luau_lib/empty.o"
-        COMMAND ${CMAKE_AR} rcs "${LUAU_VM_LIBRARY}" "${CMAKE_BINARY_DIR}/luau_lib/empty.o"
-        RESULT_VARIABLE AR_RESULT
-    )
-    
-    if(NOT AR_RESULT EQUAL 0)
-        # If compilation fails, create an empty file
-        file(WRITE "${LUAU_VM_LIBRARY}" "# Empty placeholder for CI")
-    endif()
-    
-    message(STATUS "Created placeholder Luau files for CI build")
-else
-    # For regular builds, verify Luau files exist
-    if(NOT EXISTS "${LUAU_INCLUDE_DIR}/lua.h")
-        message(FATAL_ERROR "Luau headers not found at ${LUAU_INCLUDE_DIR}. Please install Luau in the expected location or specify -DLUAU_INCLUDE_DIR=/path/to/headers")
-    endif()
-
-    if(NOT EXISTS "${LUAU_VM_LIBRARY}")
-        message(FATAL_ERROR "Luau VM library not found at ${LUAU_VM_LIBRARY}. Please install Luau in the expected location or specify -DLUAU_VM_LIBRARY=/path/to/library")
-    endif()
-
-    # Log file sizes to verify they are valid
-    file(SIZE "${LUAU_VM_LIBRARY}" LUAU_VM_SIZE)
-    message(STATUS "Confirmed Luau VM library exists (${LUAU_VM_SIZE} bytes)")
-
-    if(EXISTS "${LUAU_COMPILER_LIBRARY}")
-        file(SIZE "${LUAU_COMPILER_LIBRARY}" LUAU_COMPILER_SIZE)
-        message(STATUS "Found Luau Compiler library (${LUAU_COMPILER_SIZE} bytes)")
+    # Clone Luau repository if it doesn't exist
+    if(NOT EXISTS "${LUAU_VM_DIR}")
+        message(STATUS "Cloning Luau repository for CI build")
+        execute_process(
+            COMMAND git clone --depth 1 https://github.com/Roblox/luau.git ${CMAKE_SOURCE_DIR}/external/luau
+            RESULT_VARIABLE GIT_RESULT
+        )
+        
+        if(NOT GIT_RESULT EQUAL 0)
+            message(FATAL_ERROR "Failed to clone Luau repository for CI build")
+        endif()
     endif()
 endif()
 
@@ -262,10 +178,8 @@ set_target_properties(mylibrary PROPERTIES
 target_link_libraries(mylibrary
     PRIVATE
     roblox_execution
+    luau_vm  # Link directly with the Luau VM we're building from source
 )
-
-# Link directly with Luau libraries
-target_link_libraries(mylibrary PRIVATE Lua::lua)
 
 # Additional include paths and flags
 target_include_directories(mylibrary PRIVATE 
@@ -277,8 +191,6 @@ target_include_directories(mylibrary PRIVATE
 target_compile_definitions(mylibrary PRIVATE
     USE_LUA=1
     USE_LUAU=1
-    LUAU_VM_LIBRARY_PATH="${LUAU_VM_LIBRARY}"
-    LUA_LIBRARY_PATH="${LUA_LIBRARY}"
 )
 
 # Link with iOS frameworks if on Apple platform
