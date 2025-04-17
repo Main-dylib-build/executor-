@@ -148,17 +148,26 @@ if(DEFINED ENV{CI})
     # Create parent directories
     file(MAKE_DIRECTORY ${CMAKE_SOURCE_DIR}/external)
     
-    # Clone Luau repository if it doesn't exist
-    if(NOT EXISTS "${LUAU_VM_DIR}")
-        message(STATUS "Cloning Luau repository for CI build")
-        execute_process(
-            COMMAND git clone --depth 1 https://github.com/Roblox/luau.git ${CMAKE_SOURCE_DIR}/external/luau
-            RESULT_VARIABLE GIT_RESULT
-        )
-        
-        if(NOT GIT_RESULT EQUAL 0)
-            message(FATAL_ERROR "Failed to clone Luau repository for CI build")
-        endif()
+    # This needs to run before we check for the VM dir existence
+    execute_process(
+        COMMAND git clone --depth 1 https://github.com/Roblox/luau.git ${CMAKE_SOURCE_DIR}/external/luau
+        RESULT_VARIABLE GIT_RESULT
+    )
+    
+    if(GIT_RESULT EQUAL 0)
+        message(STATUS "Successfully cloned Luau for CI build")
+        # Update path to make sure it reflects the new clone
+        set(LUAU_ROOT "${CMAKE_SOURCE_DIR}/external/luau")
+        set(LUAU_VM_DIR "${LUAU_ROOT}/VM")
+    else
+        message(WARNING "Failed to clone Luau repository for CI build: ${GIT_RESULT}")
+    endif()
+    
+    # Check if clone worked
+    if(EXISTS "${LUAU_VM_DIR}")
+        message(STATUS "Successfully located VM directory at ${LUAU_VM_DIR}")
+    else
+        message(STATUS "VM directory not found after clone attempt at ${LUAU_VM_DIR}")
     endif()
 endif()
 
