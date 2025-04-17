@@ -1,0 +1,16 @@
+--- AIIntegration.mm.original
++++ AIIntegration.mm
+@@ -1,8 +1,12 @@
+ #include "AIIntegration.h"
+ #include "AIConfig.h"
+ #include "AISystemInitializer.h"
++
++// For CI build
++#include "../ui/VulnerabilityViewController.h"
++#include "../ui/MainViewController.h"
+ #include "ScriptAssistant.h"
+ 
+ // Use a native-code define for CI to avoid preprocessor issues with non-native code
+-#ifdef CI_BUILD
++#define CI_SAFE_BUILD
+ 

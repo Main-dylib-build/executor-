@@ -1,22 +1,57 @@
 #include <iostream>
 #include <string>
+#include <memory>
 
-// Skip iOS framework integration in CI builds to avoid compilation issues
-#ifndef SKIP_IOS_INTEGRATION
-#include "ios/ExecutionEngine.h"
-#include "ios/ScriptManager.h"
+// Include our pure C++ utility macros without Objective-C dependencies
+#include "utility.h"
+
+// Include platform-specific headers with proper guards
+#ifdef __APPLE__
+    #include "hooks/hooks.hpp"
+    #include "memory/mem.hpp"
+    
+    // Only include iOS framework headers in Objective-C++ context
+    #ifndef SKIP_IOS_INTEGRATION
+        #include "ios/ExecutionEngine.h"
+        #include "ios/ScriptManager.h"
+    #endif
 #endif
 
-#include "hooks/hooks.hpp"
-#include "memory/mem.hpp"
+// Forward declarations for RobloxExecutor namespace
+namespace RobloxExecutor {
+    struct InitOptions {
+        bool enableLogging;
+        bool enableErrorReporting;
+        bool enablePerformanceMonitoring;
+        bool enableSecurity;
+        bool enableJailbreakBypass;
+        bool enableUI;
+    };
+    
+    bool Initialize(const InitOptions& options);
+    void Shutdown();
+    
+    namespace SystemState {
+        // Platform-specific declarations inside platform-specific guards
+        #ifdef __APPLE__
+            #ifndef SKIP_IOS_INTEGRATION
+                // Only declare iOS types if integration is enabled
+                std::shared_ptr<iOS::ExecutionEngine> GetExecutionEngine();
+                std::shared_ptr<iOS::UIController> GetUIController();
+            #endif
+        #endif
+    }
+}
 
-// Entry point for the dylib
+// C interface
 extern "C" {
+    // Initialization function that runs when library is loaded
     __attribute__((constructor))
     void dylib_initializer() {
-        std::cout << "Roblox Executor dylib initialized" << std::endl;
+        std::cout << "Roblox Executor dylib initializing" << std::endl;
         
-        // Initialize hooks
+        #ifdef __APPLE__
+        // Initialize the hook engine
         Hooks::HookEngine::Initialize();
         
         // Initialize memory system
@@ -26,18 +61,24 @@ extern "C" {
         // iOS-specific initialization (skipped in CI)
         std::cout << "Initializing iOS integration" << std::endl;
         #endif
+        #endif
     }
     
     __attribute__((destructor))
     void dylib_finalizer() {
         std::cout << "Roblox Executor dylib shutting down" << std::endl;
         
+        #ifdef __APPLE__
         // Clean up hooks
         Hooks::HookEngine::ClearAllHooks();
+        #endif
     }
     
     // Lua module entry point
     int luaopen_mylibrary(void* L) {
+        // Explicitly mark the parameter as unused
+        UNUSED_PARAM(L);
+        
         std::cout << "Lua module loaded: mylibrary" << std::endl;
         
         // This will be called when the Lua state loads our library

@@ -6,134 +6,81 @@
 #include <vector>
 #include <map>
 
-// Include iOS compatibility header first
-#include "ios_compat.h"
-
-// Base headers for Objective-C interactions
+// Properly guard Objective-C code
 #ifdef __APPLE__
-#import <Foundation/Foundation.h>
-
-// Hide Objective-C in C++ context
-#ifdef __cplusplus
-// Forward declarations of Objective-C classes to avoid including full headers in C++ code
-@class UIView;
-@class UIWindow;
-@class UIButton;
-@class UIViewController;
-@class UIApplication;
-@class UIControl;
-@class UILabel;
-@class UITextField;
-@class UITextView;
-@class UITableView;
-@class UIScrollView;
-@class UIImage;
-@class UIImageView;
-@class UIColor;
-@class UIFont;
-@class UIGestureRecognizer;
-@class UIAlertController;
-@class UIAlertAction;
-@class UIActivityIndicatorView;
-@class UISwitch;
-@class CALayer;
-@class NSString;
-@class NSArray;
-@class NSMutableArray;
-@class NSDictionary;
-@class NSMutableDictionary;
-@class NSData;
-@class NSMutableData;
-@class NSNumber;
-@class NSObject;
-@class NSError;
-@class NSTimer;
-@class NSThread;
-@class NSDate;
-@class NSURLSession;
-@class NSURLSessionDataTask;
-@class NSURLRequest;
-@class NSMutableURLRequest;
-@class NSUserDefaults;
-@class NSNotificationCenter;
-@class NSCache;
-@class NSFileManager;
-@class NSBundle;
-@class NSRunLoop;
-
-// Helper functions to convert between C++ and Objective-C types
-namespace ObjCBridge {
-    // String conversion
-    NSString* CPPStringToNSString(const std::string& str);
-    std::string NSStringToCPPString(NSString* str);
-    
-    // Arrays
-    NSArray* CPPVectorToNSArray(const std::vector<std::string>& vec);
-    std::vector<std::string> NSArrayToCPPVector(NSArray* array);
-    
-    // Dictionaries
-    NSDictionary* CPPMapToNSDictionary(const std::map<std::string, std::string>& map);
-    std::map<std::string, std::string> NSDictionaryToCPPMap(NSDictionary* dict);
-    
-    // Opaque pointer wrapper for Objective-C objects to be used in C++ code
-    class ObjCWrapper {
-    private:
-        void* m_object;
-        
-    public:
-        ObjCWrapper() : m_object(nullptr) {}
-        ObjCWrapper(void* obj) : m_object(obj) {}
-        
-        void* get() const { return m_object; }
-        void set(void* obj) { m_object = obj; }
-        
-        bool isValid() const { return m_object != nullptr; }
-        void release();
-    };
-}
-
-// Implementation of inline functions
-inline NSString* ObjCBridge::CPPStringToNSString(const std::string& str) {
-    return [NSString stringWithUTF8String:str.c_str()];
-}
-
-inline std::string ObjCBridge::NSStringToCPPString(NSString* str) {
-    return str ? [str UTF8String] : "";
-}
-
-inline void ObjCBridge::ObjCWrapper::release() {
-    if (m_object) {
-        #if __has_feature(objc_arc)
-        // In ARC mode, we use CFBridgingRelease for proper memory management
-        // The cast is safe because we're releasing our ownership
-        CFRelease(m_object);
-        #else
-        // In non-ARC mode, we can call release directly
-        [(NSObject*)m_object release];
+    #ifdef __OBJC__
+        // Include iOS compatibility header for Objective-C code
+        #import <Foundation/Foundation.h>
+        #if TARGET_OS_IPHONE
+            #import <UIKit/UIKit.h>
         #endif
-        m_object = nullptr;
-    }
-}
-
-// Macro to safely bridge between C++ and Objective-C
-#if __has_feature(objc_arc)
-// ARC-specific bridging macros
-#define OBJC_BRIDGE(objctype, cppvar) ((__bridge objctype*)(cppvar.get()))
-#define OBJC_BRIDGE_CONST(objctype, cppvar) ((__bridge objctype*)(cppvar.get()))
-#define CPP_BRIDGE(cppvar, objcvar) ((cppvar).set((__bridge void*)(objcvar)))
-#define CPP_BRIDGE_TRANSFER(cppvar, objcvar) ((cppvar).set(CFBridgingRetain(objcvar)))
-#else
-// Non-ARC bridging macros
-#define OBJC_BRIDGE(objctype, cppvar) ((__bridge objctype*)(cppvar.get()))
-#define OBJC_BRIDGE_CONST(objctype, cppvar) ((__bridge objctype*)(cppvar.get()))
-#define CPP_BRIDGE(cppvar, objcvar) ((cppvar).set((__bridge_retained void*)(objcvar)))
-#define CPP_BRIDGE_TRANSFER(cppvar, objcvar) ((cppvar).set((__bridge_transfer void*)(objcvar)))
-#endif
-
-#endif // __cplusplus
+    #else
+        // Forward declare Objective-C classes for C++ code
+        #ifdef __cplusplus
+            // Forward declarations of common Objective-C types
+            typedef struct objc_class *Class;
+            typedef struct objc_object *id;
+            typedef struct objc_selector *SEL;
+            typedef signed char BOOL;
+            
+            // Common Foundation types for C++ code
+            typedef const void* CFTypeRef;
+            typedef const struct __CFString* CFStringRef;
+            typedef const struct __CFDictionary* CFDictionaryRef;
+            typedef const struct __CFArray* CFArrayRef;
+            
+            // Forward declarations of Objective-C classes
+            #define OBJC_CLASS(name) class name;
+            OBJC_CLASS(UIView)
+            OBJC_CLASS(UIWindow)
+            OBJC_CLASS(UIButton)
+            OBJC_CLASS(UIViewController)
+            OBJC_CLASS(UIApplication)
+            OBJC_CLASS(UIControl)
+            OBJC_CLASS(UILabel)
+            OBJC_CLASS(UITextField)
+            OBJC_CLASS(UITextView)
+            OBJC_CLASS(UITableView)
+            OBJC_CLASS(UIScrollView)
+            OBJC_CLASS(UIImage)
+            OBJC_CLASS(UIImageView)
+            OBJC_CLASS(UIColor)
+            OBJC_CLASS(UIFont)
+            OBJC_CLASS(UIGestureRecognizer)
+            OBJC_CLASS(UIAlertController)
+            OBJC_CLASS(UIAlertAction)
+            OBJC_CLASS(UIActivityIndicatorView)
+            OBJC_CLASS(UISwitch)
+            OBJC_CLASS(CALayer)
+            OBJC_CLASS(NSString)
+            OBJC_CLASS(NSArray)
+            OBJC_CLASS(NSMutableArray)
+            OBJC_CLASS(NSDictionary)
+            OBJC_CLASS(NSMutableDictionary)
+            OBJC_CLASS(NSData)
+            OBJC_CLASS(NSMutableData)
+            OBJC_CLASS(NSNumber)
+            OBJC_CLASS(NSObject)
+            OBJC_CLASS(NSError)
+            OBJC_CLASS(NSTimer)
+            OBJC_CLASS(NSThread)
+            OBJC_CLASS(NSDate)
+            OBJC_CLASS(NSURLSession)
+            OBJC_CLASS(NSURLSessionDataTask)
+            OBJC_CLASS(NSURLRequest)
+            OBJC_CLASS(NSMutableURLRequest)
+            OBJC_CLASS(NSUserDefaults)
+            OBJC_CLASS(NSNotificationCenter)
+            OBJC_CLASS(NSCache)
+            OBJC_CLASS(NSFileManager)
+            OBJC_CLASS(NSBundle)
+            OBJC_CLASS(NSRunLoop)
+            #undef OBJC_CLASS
+        #endif // __cplusplus
+    #endif // __OBJC__
 #endif // __APPLE__
 
-// Define common constants and interfaces that can be used in both C++ and Objective-C
+// Common definitions that work in all contexts
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -153,35 +100,6 @@ typedef enum {
     kErrorNetworkFailure = -10
 } ErrorCode;
 
-// Platform detection (using a unique name to avoid conflicts with system headers)
-#ifdef __APPLE__
-    #define EXECUTOR_PLATFORM_IOS 1
-#else
-    #define EXECUTOR_PLATFORM_IOS 0
-#endif
-
-// Common function prototypes for platform abstraction
-typedef void (*CallbackFunc)(void* context, int status, const char* message);
-
 #ifdef __cplusplus
 }
-#endif
-
-// Include platform-specific headers when not in Objective-C++ mode
-#if !defined(__OBJC__) && defined(__APPLE__)
-    // Include minimal C declarations for iOS functions without requiring Objective-C
-    #ifdef __cplusplus
-    extern "C" {
-    #endif
-        // Declare minimal iOS functions we might need to call from C++
-        int UIApplicationMain(int argc, char* argv[], void* principalClassName, void* delegateClassName);
-        void* UIGraphicsGetCurrentContext(void);
-        void UIGraphicsPushContext(void* context);
-        void UIGraphicsPopContext(void);
-        void UIGraphicsBeginImageContext(struct CGSize size);
-        void* UIGraphicsGetImageFromCurrentImageContext(void);
-        void UIGraphicsEndImageContext(void);
-    #ifdef __cplusplus
-    }
-    #endif
 #endif

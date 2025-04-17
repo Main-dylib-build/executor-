@@ -1,5 +1,5 @@
 
-#include "../ios_compat.h"
+#include "../../ios_compat.h"
 #include "SelfTrainingManager.h"
 #include "local_models/LocalModelBase.h"
 #include "local_models/ScriptGenerationModel.h"

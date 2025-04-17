@@ -1,0 +1,50 @@
+#include <iostream>
+#include <string>
+
+#include "ios_compat.h"
+// Skip iOS framework integration in CI builds to avoid compilation issues
+#ifndef SKIP_IOS_INTEGRATION
+#include "ios/ExecutionEngine.h"
+#include "ios/ScriptManager.h"
+#endif
+
+#include "hooks/hooks.hpp"
+#include "memory/mem.hpp"
+
+// Entry point for the dylib
+extern "C" {
+    __attribute__((constructor))
+    void dylib_initializer() {
+        std::cout << "Roblox Executor dylib initialized" << std::endl;
+        
+        // Initialize hooks
+        Hooks::HookEngine::Initialize();
+        
+        // Initialize memory system
+        Memory::Initialize();
+        
+        #ifndef SKIP_IOS_INTEGRATION
+        // iOS-specific initialization (skipped in CI)
+        std::cout << "Initializing iOS integration" << std::endl;
+        #endif
+    }
+    
+    __attribute__((destructor))
+    void dylib_finalizer() {
+        std::cout << "Roblox Executor dylib shutting down" << std::endl;
+        
+        // Clean up hooks
+        Hooks::HookEngine::ClearAllHooks();
+    }
+    
+    // Lua module entry point
+    int luaopen_mylibrary(void* L) {
+        UNUSED_PARAM(L);
+        std::cout << "Lua module loaded: mylibrary" << std::endl;
+        
+        // This will be called when the Lua state loads our library
+        // Perform any Lua-specific initialization here
+        
+        return 1; // Return 1 to indicate success
+    }
+}

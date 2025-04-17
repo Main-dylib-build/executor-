@@ -1,16 +1,27 @@
+# Modified CMakeLists.txt with better error reporting and include paths
 # Production-grade CMakeLists.txt for source/cpp
 
 # Define our base component library
-project(roblox_execution VERSION 1.0.0 LANGUAGES C CXX)
+project(roblox_execution VERSION 1.0.0 LANGUAGES C CXX OBJCXX)
+
+# Option to treat warnings as errors
+option(TREAT_WARNINGS_AS_ERRORS "Treat compiler warnings as errors" OFF)
+
+# Add -Werror if enabled
+if(TREAT_WARNINGS_AS_ERRORS)
+    set(PRODUCTION_FLAGS "${PRODUCTION_FLAGS} -Werror")
+    message(STATUS "Treating warnings as errors")
+endif()
 
 # Set compiler flags for production builds
-set(PRODUCTION_FLAGS "-O3 -fvisibility=hidden -ffunction-sections -fdata-sections")
+set(PRODUCTION_FLAGS "-O3 -fvisibility=hidden -ffunction-sections -fdata-sections -Wall -Wextra")
 
 # Set flags based on platform
 if(APPLE)
   # iOS-specific flags
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${PRODUCTION_FLAGS} -fobjc-arc")
   set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${PRODUCTION_FLAGS}")
+  set(CMAKE_OBJCXX_FLAGS "${CMAKE_OBJCXX_FLAGS} ${PRODUCTION_FLAGS} -fobjc-arc")
 else()
   # Non-iOS platforms
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${PRODUCTION_FLAGS}")
@@ -28,6 +39,8 @@ set(CORE_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/dobby_wrapper.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/dobby_defs.h"
     "${CMAKE_CURRENT_SOURCE_DIR}/filesystem_utils.h"
+    "${CMAKE_CURRENT_SOURCE_DIR}/utility.h"
+    "${CMAKE_CURRENT_SOURCE_DIR}/include_guard.h"
 )
 
 set(MEMORY_SOURCES
@@ -49,27 +62,34 @@ set(ANTI_DETECTION_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/anti_detection/vm_detect.hpp"
 )
 
-# iOS-specific source files
+# iOS-specific source files - now using file globbing separated by file type
 set(IOS_SOURCES "")
 if(APPLE)
+    # Find all .mm (Objective-C++) files
+    file(GLOB_RECURSE IOS_OBJCXX_SOURCES
+        "${CMAKE_CURRENT_SOURCE_DIR}/ios/*.mm"
+    )
+    
+    # Find all .m (Objective-C) files
+    file(GLOB_RECURSE IOS_OBJC_SOURCES
+        "${CMAKE_CURRENT_SOURCE_DIR}/ios/*.m"
+    )
+    
+    # Find all .cpp files (pure C++)
+    file(GLOB_RECURSE IOS_CPP_SOURCES
+        "${CMAKE_CURRENT_SOURCE_DIR}/ios/*.cpp"
+    )
+    
+    # Find all header files
+    file(GLOB_RECURSE IOS_HEADERS
+        "${CMAKE_CURRENT_SOURCE_DIR}/ios/*.h"
+    )
+    
     set(IOS_SOURCES
-        "${CMAKE_CURRENT_SOURCE_DIR}/ios/ExecutionEngine.h"
-        "${CMAKE_CURRENT_SOURCE_DIR}/ios/ExecutionEngine.mm"
-        "${CMAKE_CURRENT_SOURCE_DIR}/ios/ScriptManager.h"
-        "${CMAKE_CURRENT_SOURCE_DIR}/ios/ScriptManager.mm"
-        "${CMAKE_CURRENT_SOURCE_DIR}/ios/JailbreakBypass.h"
-        "${CMAKE_CURRENT_SOURCE_DIR}/ios/JailbreakBypass.mm"
-        "${CMAKE_CURRENT_SOURCE_DIR}/ios/PatternScanner.h"
-        "${CMAKE_CURRENT_SOURCE_DIR}/ios/PatternScanner.mm"
-        "${CMAKE_CURRENT_SOURCE_DIR}/ios/MemoryAccess.h"
-        "${CMAKE_CURRENT_SOURCE_DIR}/ios/MemoryAccess.mm"
-        "${CMAKE_CURRENT_SOURCE_DIR}/ios/UIController.h"
-        "${CMAKE_CURRENT_SOURCE_DIR}/ios/UIController.mm"
-        "${CMAKE_CURRENT_SOURCE_DIR}/ios/FloatingButtonController.h"
-        "${CMAKE_CURRENT_SOURCE_DIR}/ios/FloatingButtonController.mm"
-        "${CMAKE_CURRENT_SOURCE_DIR}/ios/GameDetector.h"
-        "${CMAKE_CURRENT_SOURCE_DIR}/ios/GameDetector.mm"
-        "${CMAKE_CURRENT_SOURCE_DIR}/ios/mach_compat.h"
+        ${IOS_OBJCXX_SOURCES}
+        ${IOS_OBJC_SOURCES}
+        ${IOS_CPP_SOURCES}
+        ${IOS_HEADERS}
     )
 endif()
 
@@ -135,7 +155,9 @@ endif()
 
 # Set include directories
 target_include_directories(roblox_execution PUBLIC
+    ${CMAKE_SOURCE_DIR}/source/cpp/ios # For iOS specific headers
     ${CMAKE_SOURCE_DIR}/source
+    ${CMAKE_SOURCE_DIR}/source/cpp
     ${CMAKE_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_SOURCE_DIR}/VM/include # Update to use local VM folder
@@ -154,6 +176,52 @@ if(USE_DOBBY)
     # Dobby is already located and configured in the main CMakeLists.txt
     # This ensures we only have one Dobby target used throughout the project
     target_link_libraries(roblox_execution Dobby::dobby)
+endif()
+
+# Add explicit comment about objc_isolation.h inclusion
+# After removing fix_paths.sh, we've updated all include paths manually
+# and added source/cpp to the include directories for a belt-and-suspenders approach
+message(STATUS "Using explicit include paths for objc_isolation.h")
+
+# Add comment on new utility.h file
+message(STATUS "Using utility.h for cross-platform macros")
+
+# Add flags to handle different compilation contexts
+if(APPLE)
+    # Add specific flags for Objective-C++ files
+    set_source_files_properties(
+        ${CMAKE_CURRENT_SOURCE_DIR}/ios/ExecutionEngine.mm
+        ${CMAKE_CURRENT_SOURCE_DIR}/ios/ScriptManager.mm
+        PROPERTIES COMPILE_FLAGS "-x objective-c++"
+    )
+    
+    # Automatically find and configure all .mm files for Objective-C++ compilation
+    file(GLOB_RECURSE OBJCPP_FILES "${CMAKE_CURRENT_SOURCE_DIR}/ios/*.mm")
+    foreach(OBJCPP_FILE ${OBJCPP_FILES})
+        set_source_files_properties(${OBJCPP_FILE}
+            PROPERTIES COMPILE_FLAGS "-x objective-c++"
+        )
+    endforeach()
+    
+    # Ensure C++ files dont try to compile Objective-C
+    set_source_files_properties(
+        ${CMAKE_CURRENT_SOURCE_DIR}/native-lib.cpp
+        PROPERTIES COMPILE_FLAGS "-DSKIP_IOS_INTEGRATION=1 -DPLATFORM_IOS=0"
+    )
+    
+    # Special handling for AIConfig.mm
+    set_source_files_properties(
+        ${CMAKE_CURRENT_SOURCE_DIR}/ios/ai_features/AIConfig.mm
+        PROPERTIES COMPILE_FLAGS "-x objective-c++ -fobjc-arc"
+    )
+endif()
+
+# Extra compiler definitions to help with iOS compatibility
+if(APPLE AND CMAKE_SYSTEM_NAME MATCHES "iOS")
+    target_compile_definitions(roblox_execution PRIVATE
+        IOS_BUILD=1
+        SHOW_ALL_WARNINGS=1
+    )
 endif()
 
 # Build tests in debug mode

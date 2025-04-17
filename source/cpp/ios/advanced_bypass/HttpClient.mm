@@ -1,11 +1,17 @@
-
-#include "../ios_compat.h"
+#include "../../ios_compat.h"
 #include "HttpClient.h"
 #include <iostream>
+#include <string>
+#include <vector>
+#include <map>
+#include <functional>
 #include <chrono>
 #include <thread>
+#include <atomic>
 #include <mutex>
-#include <condition_variable>
+
+#ifdef __APPLE__
+#import <Foundation/Foundation.h>
 
 namespace iOS {
 namespace AdvancedBypass {
@@ -21,31 +27,42 @@ namespace AdvancedBypass {
     
     // Destructor
     HttpClient::~HttpClient() {
-        // Release NSURLSession and configuration (manual memory management)
+        // Release NSURLSession and configuration with ARC-compatible bridging
         if (m_session) {
-            NSURLSession* session = (NSURLSession*)m_session;
-            [session release];
+            // Use __bridge_transfer to transfer ownership from C++ to ARC
+            NSURLSession* session = (__bridge_transfer NSURLSession*)m_session;
             m_session = nullptr;
+            
+            // No need to call release with ARC and __bridge_transfer
         }
         
         if (m_sessionConfig) {
-            NSURLSessionConfiguration* config = (NSURLSessionConfiguration*)m_sessionConfig;
-            [config release];
+            // Use __bridge_transfer to transfer ownership from C++ to ARC
+            NSURLSessionConfiguration* config = (__bridge_transfer NSURLSessionConfiguration*)m_sessionConfig;
             m_sessionConfig = nullptr;
+            
+            // No need to call release with ARC and __bridge_transfer
         }
     }
     
     // Initialize the HTTP client
     bool HttpClient::Initialize() {
+        // Check if already initialized
         if (m_initialized) {
             return true;
         }
         
-        @autoreleasepool {
+        @try {
             // Create session configuration
             NSURLSessionConfiguration* config = [NSURLSessionConfiguration defaultSessionConfiguration];
             config.timeoutIntervalForRequest = m_defaultTimeout;
-            config.timeoutIntervalForResource = m_defaultTimeout;
+            config.timeoutIntervalForResource = m_defaultTimeout * 2;
+            config.HTTPMaximumConnectionsPerHost = 5;
+            
+            // Setup cache policy based on settings
+            config.requestCachePolicy = m_useCache ? 
+                NSURLRequestReturnCacheDataElseLoad : 
+                NSURLRequestReloadIgnoringLocalCacheData;
             
             // Set up headers to mimic a normal browser
             config.HTTPAdditionalHeaders = @{
@@ -54,550 +71,208 @@ namespace AdvancedBypass {
                 @"Accept-Language": @"en-US,en;q=0.9"
             };
             
-            // Store configuration (manual retain)
-            m_sessionConfig = (void*)config;
-            [config retain];
+            // Store configuration with ARC-compatible bridging
+            m_sessionConfig = (__bridge_retained void*)config;
             
-            // Create session (manual retain)
+            // Create session with ARC-compatible bridging
             NSURLSession* session = [NSURLSession sessionWithConfiguration:config];
-            m_session = (void*)session;
-            [session retain];
+            m_session = (__bridge_retained void*)session;
             
             m_initialized = true;
             return true;
         }
-    }
-    
-    // Synchronous HTTP GET request
-    HttpClient::RequestResult HttpClient::Get(const std::string& url, int timeout) {
-        // Initialize if needed
-        if (!m_initialized && !Initialize()) {
-            return RequestResult(false, 0, "Failed to initialize HTTP client", "", 0);
-        }
-        
-        // Validate URL
-        if (!ValidateUrl(url)) {
-            return RequestResult(false, 0, "Invalid URL: " + url, "", 0);
-        }
-        
-        // Check cache
-        if (m_useCache) {
-            RequestResult cachedResult = GetFromCacheIfAvailable(url);
-            if (cachedResult.m_success) {
-                return cachedResult;
-            }
-        }
-        
-        // Create semaphore for synchronous request
-        std::mutex mutex;
-        std::condition_variable cv;
-        bool requestComplete = false;
-        RequestResult result;
-        
-        // Send async request and wait for completion
-        SendRequest(url, "GET", {}, "", timeout > 0 ? timeout : m_defaultTimeout, 
-                   [&mutex, &cv, &requestComplete, &result](const RequestResult& asyncResult) {
-                       std::lock_guard<std::mutex> lock(mutex);
-                       result = asyncResult;
-                       requestComplete = true;
-                       cv.notify_one();
-                   });
-        
-        // Wait for completion with timeout
-        {
-            std::unique_lock<std::mutex> lock(mutex);
-            if (!cv.wait_for(lock, std::chrono::seconds(timeout > 0 ? timeout : m_defaultTimeout),
-                            [&requestComplete]() { return requestComplete; })) {
-                return RequestResult(false, 0, "Request timed out: " + url, "", 0);
-            }
-        }
-        
-        // Cache result if successful
-        if (result.m_success && m_useCache) {
-            AddToCacheIfNeeded(url, result);
-        }
-        
-        return result;
-    }
-    
-    // Asynchronous HTTP GET request
-    void HttpClient::GetAsync(const std::string& url, CompletionCallback callback, int timeout) {
-        // Initialize if needed
-        if (!m_initialized && !Initialize()) {
-            if (callback) {
-                callback(RequestResult(false, 0, "Failed to initialize HTTP client", "", 0));
-            }
-            return;
-        }
-        
-        // Validate URL
-        if (!ValidateUrl(url)) {
-            if (callback) {
-                callback(RequestResult(false, 0, "Invalid URL: " + url, "", 0));
-            }
-            return;
-        }
-        
-        // Check cache
-        if (m_useCache) {
-            RequestResult cachedResult = GetFromCacheIfAvailable(url);
-            if (cachedResult.m_success) {
-                if (callback) {
-                    callback(cachedResult);
-                }
-                return;
-            }
-        }
-        
-        // Create completion wrapper to handle caching
-        CompletionCallback wrappedCallback = [this, url, callback](const RequestResult& result) {
-            // Cache result if successful
-            if (result.m_success && m_useCache) {
-                AddToCacheIfNeeded(url, result);
-            }
-            
-            // Call original callback
-            if (callback) {
-                callback(result);
-            }
-        };
-        
-        // Send request
-        SendRequest(url, "GET", {}, "", timeout > 0 ? timeout : m_defaultTimeout, wrappedCallback);
-    }
-    
-    // Synchronous HTTP POST request
-    HttpClient::RequestResult HttpClient::Post(const std::string& url, const std::string& body, int timeout) {
-        // Initialize if needed
-        if (!m_initialized && !Initialize()) {
-            return RequestResult(false, 0, "Failed to initialize HTTP client", "", 0);
-        }
-        
-        // Validate URL
-        if (!ValidateUrl(url)) {
-            return RequestResult(false, 0, "Invalid URL: " + url, "", 0);
-        }
-        
-        // Create semaphore for synchronous request
-        std::mutex mutex;
-        std::condition_variable cv;
-        bool requestComplete = false;
-        RequestResult result;
-        
-        // Default headers for POST
-        std::unordered_map<std::string, std::string> headers = {
-            {"Content-Type", "application/x-www-form-urlencoded"}
-        };
-        
-        // Send async request and wait for completion
-        SendRequest(url, "POST", headers, body, timeout > 0 ? timeout : m_defaultTimeout, 
-                   [&mutex, &cv, &requestComplete, &result](const RequestResult& asyncResult) {
-                       std::lock_guard<std::mutex> lock(mutex);
-                       result = asyncResult;
-                       requestComplete = true;
-                       cv.notify_one();
-                   });
-        
-        // Wait for completion with timeout
-        {
-            std::unique_lock<std::mutex> lock(mutex);
-            if (!cv.wait_for(lock, std::chrono::seconds(timeout > 0 ? timeout : m_defaultTimeout),
-                            [&requestComplete]() { return requestComplete; })) {
-                return RequestResult(false, 0, "Request timed out: " + url, "", 0);
-            }
-        }
-        
-        return result;
-    }
-    
-    // Asynchronous HTTP POST request
-    void HttpClient::PostAsync(const std::string& url, const std::string& body, 
-                             CompletionCallback callback, int timeout) {
-        // Initialize if needed
-        if (!m_initialized && !Initialize()) {
-            if (callback) {
-                callback(RequestResult(false, 0, "Failed to initialize HTTP client", "", 0));
-            }
-            return;
-        }
-        
-        // Validate URL
-        if (!ValidateUrl(url)) {
-            if (callback) {
-                callback(RequestResult(false, 0, "Invalid URL: " + url, "", 0));
-            }
-            return;
-        }
-        
-        // Default headers for POST
-        std::unordered_map<std::string, std::string> headers = {
-            {"Content-Type", "application/x-www-form-urlencoded"}
-        };
-        
-        // Send request
-        SendRequest(url, "POST", headers, body, timeout > 0 ? timeout : m_defaultTimeout, callback);
-    }
-    
-    // Set the default timeout
-    void HttpClient::SetDefaultTimeout(int timeout) {
-        m_defaultTimeout = timeout;
-        
-        // Update session configuration if initialized
-        if (m_initialized && m_sessionConfig) {
-            NSURLSessionConfiguration* config = (__bridge NSURLSessionConfiguration*)m_sessionConfig;
-            config.timeoutIntervalForRequest = timeout;
-            config.timeoutIntervalForResource = timeout;
+        @catch (NSException* exception) {
+            std::cerr << "HttpClient::Initialize failed: " << [[exception reason] UTF8String] << std::endl;
+            return false;
         }
     }
     
-    // Get the default timeout
-    int HttpClient::GetDefaultTimeout() const {
-        return m_defaultTimeout;
-    }
-    
-    // Enable or disable response caching
-    void HttpClient::SetUseCache(bool useCache) {
-        m_useCache = useCache;
-    }
-    
-    // Check if response caching is enabled
-    bool HttpClient::GetUseCache() const {
-        return m_useCache;
-    }
-    
-    // Clear the response cache
-    void HttpClient::ClearCache() {
-        m_cache.clear();
-    }
-    
-    // Check if a URL is cached
-    bool HttpClient::IsUrlCached(const std::string& url) const {
-        return m_cache.find(NormalizeUrl(url)) != m_cache.end();
-    }
-    
-    // Send HTTP request
-    void HttpClient::SendRequest(const std::string& url, const std::string& method, 
+    // Send HTTP request with all parameters (private method)
+    void HttpClient::SendRequest(const std::string& url, 
+                               const std::string& method, 
                                const std::unordered_map<std::string, std::string>& headers,
-                               const std::string& body, int timeout, CompletionCallback callback) {
-        @autoreleasepool {
-            // Start timing
-            auto startTime = std::chrono::high_resolution_clock::now();
-            
-            // Create URL
-            NSURL* nsUrl = [NSURL URLWithString:[NSString stringWithUTF8String:url.c_str()]];
-            if (!nsUrl) {
-                if (callback) {
-                    callback(RequestResult(false, 0, "Invalid URL: " + url, "", 0));
-                }
-                return;
-            }
-            
-            // Create request
-            NSMutableURLRequest* request = [NSMutableURLRequest requestWithURL:nsUrl];
-            request.HTTPMethod = [NSString stringWithUTF8String:method.c_str()];
-            request.timeoutInterval = timeout;
-            
-            // Add headers
-            for (const auto& header : headers) {
-                [request setValue:[NSString stringWithUTF8String:header.second.c_str()] 
-                  forHTTPHeaderField:[NSString stringWithUTF8String:header.first.c_str()]];
-            }
-            
-            // Add body if needed
-            if (!body.empty()) {
-                request.HTTPBody = [NSData dataWithBytes:body.c_str() length:body.size()];
-            }
-            
-            // Get session
-            NSURLSession* session = (__bridge NSURLSession*)m_session;
-            
-            // Create data task
-            NSURLSessionDataTask* task = [session dataTaskWithRequest:request 
-                                                   completionHandler:^(NSData* data, NSURLResponse* response, NSError* error) {
-                // Get status code
-                NSInteger statusCode = 0;
-                if ([response isKindOfClass:[NSHTTPURLResponse class]]) {
-                    statusCode = [(NSHTTPURLResponse*)response statusCode];
-                }
+                               const std::string& body, 
+                               int timeout,
+                               CompletionCallback callback) {
+        // Ensure initialized
+        if (!m_initialized && !Initialize()) {
+            RequestResult result(false, -1, "HTTP client failed to initialize", "", 0);
+            callback(result);
+            return;
+        }
+        
+        // Get start time for performance tracking
+        uint64_t startTime = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count();
+        
+        // Perform on background thread to avoid blocking
+        dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), 
+^
+{
+            @try {
+                // Create URL
+                NSString* urlString = [NSString stringWithUTF8String:url.c_str()];
+                NSURL* nsUrl = [NSURL URLWithString:urlString];
                 
-                // Check for error
-                if (error) {
-                    // Calculate request time
-                    auto endTime = std::chrono::high_resolution_clock::now();
-                    uint64_t requestTime = std::chrono::duration_cast<std::chrono::milliseconds>(endTime - startTime).count();
-                    
-                    // Build error result
-                    std::string errorMsg = [[error localizedDescription] UTF8String];
-                    if (callback) {
-                        callback(RequestResult(false, statusCode, errorMsg, "", requestTime));
-                    }
+                if (!nsUrl) {
+                    RequestResult result(false, -1, "Invalid URL: " + url, "", 0);
+                    dispatch_async(dispatch_get_main_queue(), 
+^
+{
+                        callback(result);
+                    });
                     return;
                 }
                 
-                // Get response data
-                std::string content;
-                if (data) {
-                    content = std::string((const char*)[data bytes], [data length]);
+                // Create request
+                NSMutableURLRequest* request = [NSMutableURLRequest requestWithURL:nsUrl];
+                
+                // Set method
+                [request setHTTPMethod:[NSString stringWithUTF8String:method.c_str()]];
+                
+                // Set timeout
+                if (timeout > 0) {
+                    [request setTimeoutInterval:timeout];
                 }
                 
-                // Calculate request time
-                auto endTime = std::chrono::high_resolution_clock::now();
-                uint64_t requestTime = std::chrono::duration_cast<std::chrono::milliseconds>(endTime - startTime).count();
-                
-                // Call callback with result
-                if (callback) {
-                    callback(RequestResult(true, statusCode, "", content, requestTime));
+                // Set headers
+                for (const auto& header : headers) {
+                    NSString* key = [NSString stringWithUTF8String:header.first.c_str()];
+                    NSString* value = [NSString stringWithUTF8String:header.second.c_str()];
+                    [request setValue:value forHTTPHeaderField:key];
                 }
-            }];
-            
-            // Start task
-            [task resume];
-        }
-    }
-    
-    // Validate URL
-    bool HttpClient::ValidateUrl(const std::string& url) {
-        @autoreleasepool {
-            NSURL* nsUrl = [NSURL URLWithString:[NSString stringWithUTF8String:url.c_str()]];
-            if (!nsUrl) {
-                return false;
+                
+                // Set body if not empty
+                if (!body.empty()) {
+                    NSData* bodyData = [NSData dataWithBytes:body.c_str() length:body.length()];
+                    [request setHTTPBody:bodyData];
+                }
+                
+                // Get session using proper ARC bridging
+                NSURLSession* session = (__bridge NSURLSession*)m_session;
+                
+                // Create data task
+                NSURLSessionDataTask* task = [session dataTaskWithRequest:request
+                                                       completionHandler:
+^
+(NSData* data, NSURLResponse* response, NSError* error) {
+                    // Calculate request time
+                    uint64_t endTime = std::chrono::duration_cast<std::chrono::milliseconds>(
+                        std::chrono::system_clock::now().time_since_epoch()).count();
+                    uint64_t requestTime = endTime - startTime;
+                    
+                    // Create result object with initial values
+                    bool success = false;
+                    int statusCode = 0;
+                    std::string errorStr = "";
+                    std::string content = "";
+                    
+                    if (error) {
+                        // Handle error
+                        success = false;
+                        statusCode = (int)[error code];
+                        errorStr = [[error localizedDescription] UTF8String];
+                    } else {
+                        // Handle success
+                        NSHTTPURLResponse* httpResponse = (NSHTTPURLResponse*)response;
+                        success = (httpResponse.statusCode >= 200 && httpResponse.statusCode < 300);
+                        statusCode = (int)httpResponse.statusCode;
+                        
+                        // Get response data
+                        if (data) {
+                            // Convert data to string
+                            content = std::string((const char*)[data bytes], [data length]);
+                        }
+                        
+                        // We can't store the headers in the RequestResult since it doesn't have an m_headers field
+                        // Just log a few important ones for debugging
+                        if (m_useCache) {
+                            NSDictionary* respHeaders = httpResponse.allHeaderFields;
+                            NSString* contentType = respHeaders[@"Content-Type"];
+                            NSString* cacheControl = respHeaders[@"Cache-Control"];
+                            NSLog(@"Response headers - Content-Type: %@, Cache-Control: %@", contentType, cacheControl);
+                        }
+                    }
+                    
+                    // Create final result with all data
+                    RequestResult result(success, statusCode, errorStr, content, requestTime);
+                    
+                    // Call callback on main thread
+                    dispatch_async(dispatch_get_main_queue(), 
+^
+{
+                        callback(result);
+                    });
+                }];
+                
+                // Start task
+                [task resume];
             }
-            
-            // Check scheme
-            NSString* scheme = [nsUrl scheme];
-            if (!scheme) {
-                return false;
+            @catch (NSException* exception) {
+                RequestResult result(false, -1, [[exception reason] UTF8String], "", 0);
+                
+                dispatch_async(dispatch_get_main_queue(), 
+^
+{
+                    callback(result);
+                });
             }
-            
-            // Allow HTTP and HTTPS
-            return [scheme isEqualToString:@"http"] || [scheme isEqualToString:@"https"];
-        }
+        });
     }
     
-    // Normalize URL for caching
-    std::string HttpClient::NormalizeUrl(const std::string& url) const {
-        @autoreleasepool {
-            NSURL* nsUrl = [NSURL URLWithString:[NSString stringWithUTF8String:url.c_str()]];
-            if (!nsUrl) {
-                return url;
-            }
-            
-            // Use absoluteString for normalized URL
-            return [[nsUrl absoluteString] UTF8String];
-        }
+    // Synchronous GET request implementation
+    HttpClient::RequestResult HttpClient::Get(const std::string& url, int timeout) {
+        // Create a semaphore for synchronous wait
+        dispatch_semaphore_t semaphore = dispatch_semaphore_create(0);
+        
+        // Response data
+        RequestResult result;
+        
+        // Make async call but wait for completion
+        GetAsync(url, [&result, &semaphore](const RequestResult& asyncResult) {
+            result = asyncResult;
+            dispatch_semaphore_signal(semaphore);
+        }, timeout);
+        
+        // Wait for completion
+        dispatch_semaphore_wait(semaphore, DISPATCH_TIME_FOREVER);
+        
+        return result;
     }
     
-    // Check if response should be cached
-    bool HttpClient::ShouldUseCache(const std::string& url, const std::string& method) {
-        // Only cache GET requests
-        return m_useCache && method == "GET";
+    // Asynchronous GET request
+    void HttpClient::GetAsync(const std::string& url, CompletionCallback callback, int timeout) {
+        SendRequest(url, "GET", {}, "", timeout > 0 ? timeout : m_defaultTimeout, callback);
     }
     
-    // Add response to cache
-    void HttpClient::AddToCacheIfNeeded(const std::string& url, const RequestResult& result) {
-        if (!m_useCache) {
-            return;
-        }
+    // Synchronous POST request implementation
+    HttpClient::RequestResult HttpClient::Post(const std::string& url, const std::string& body, int timeout) {
+        // Create a semaphore for synchronous wait
+        dispatch_semaphore_t semaphore = dispatch_semaphore_create(0);
         
-        // Only cache successful responses
-        if (!result.m_success) {
-            return;
-        }
+        // Response data
+        RequestResult result;
         
-        // Add to cache
-        m_cache[NormalizeUrl(url)] = result;
+        // Make async call but wait for completion
+        PostAsync(url, body, [&result, &semaphore](const RequestResult& asyncResult) {
+            result = asyncResult;
+            dispatch_semaphore_signal(semaphore);
+        }, timeout);
+        
+        // Wait for completion
+        dispatch_semaphore_wait(semaphore, DISPATCH_TIME_FOREVER);
+        
+        return result;
     }
     
-    // Get response from cache
-    HttpClient::RequestResult HttpClient::GetFromCacheIfAvailable(const std::string& url) {
-        // Check if URL is in cache
-        auto it = m_cache.find(NormalizeUrl(url));
-        if (it != m_cache.end()) {
-            return it->second;
-        }
-        
-        // Not in cache
-        return RequestResult();
+    // Asynchronous POST request
+    void HttpClient::PostAsync(const std::string& url, const std::string& body, 
+                           CompletionCallback callback, int timeout) {
+        std::unordered_map<std::string, std::string> headers = {
+            {"Content-Type", "application/x-www-form-urlencoded"}
+        };
+        SendRequest(url, "POST", headers, body, timeout > 0 ? timeout : m_defaultTimeout, callback);
     }
-    
-    // Get Lua code for HTTP functions
-    std::string HttpClient::GetHttpFunctionsCode() {
-        return R"(
--- Create the game table if it doesn't exist
-game = game or {}
-
--- Implementation of game:HttpGet function
-function game:HttpGet(url, cache)
-    -- Default cache to true if not specified
-    if cache == nil then cache = true end
-    
-    -- Call native HTTP GET function
-    local success, result = pcall(function()
-        -- In a real implementation, this would call a native C++ function
-        -- For now, we'll simulate the result
-        if url and type(url) == "string" and #url > 0 then
-            -- Call _httpGet function if available
-            if _httpGet then
-                return _httpGet(url, cache)
-            else
-                error("HTTP request functionality not available")
-            end
-        else
-            error("Invalid URL")
-        end
-    end)
-    
-    -- Handle errors
-    if not success then
-        error("HttpGet failed: " .. tostring(result), 2)
-    end
-    
-    return result
-end
-
--- Async variant
-function game:HttpGetAsync(url, callback)
-    -- Argument validation
-    if type(url) ~= "string" or #url == 0 then
-        error("Invalid URL", 2)
-    end
-    
-    -- Use callback if provided
-    if callback and type(callback) == "function" then
-        -- Call native async function
-        if _httpGetAsync then
-            _httpGetAsync(url, function(success, result)
-                if success then
-                    callback(result)
-                else
-                    callback(nil, result) -- Pass error as second argument
-                end
-            end)
-        else
-            -- Fall back to sync version
-            local success, result = pcall(function()
-                return game:HttpGet(url)
-            end)
-            
-            if success then
-                callback(result)
-            else
-                callback(nil, result)
-            end
-        end
-        
-        return -- No return value for async with callback
-    else
-        -- If no callback, just use sync version
-        return game:HttpGet(url)
-    end
-end
-
--- Implementation of game:HttpPost function
-function game:HttpPost(url, data, contentType, compress)
-    -- Default parameters
-    contentType = contentType or "application/json"
-    compress = compress or false
-    
-    -- Call native HTTP POST function
-    local success, result = pcall(function()
-        -- In a real implementation, this would call a native C++ function
-        if url and type(url) == "string" and #url > 0 then
-            -- Call _httpPost function if available
-            if _httpPost then
-                return _httpPost(url, data, contentType, compress)
-            else
-                error("HTTP request functionality not available")
-            end
-        else
-            error("Invalid URL")
-        end
-    end)
-    
-    -- Handle errors
-    if not success then
-        error("HttpPost failed: " .. tostring(result), 2)
-    end
-    
-    return result
-end
-
--- Async variant
-function game:HttpPostAsync(url, data, contentType, compress, callback)
-    -- Default parameters
-    contentType = contentType or "application/json"
-    compress = compress or false
-    
-    -- Use callback if provided
-    if callback and type(callback) == "function" then
-        -- Call native async function
-        if _httpPostAsync then
-            _httpPostAsync(url, data, contentType, compress, function(success, result)
-                if success then
-                    callback(result)
-                else
-                    callback(nil, result) -- Pass error as second argument
-                end
-            end)
-        else
-            -- Fall back to sync version
-            local success, result = pcall(function()
-                return game:HttpPost(url, data, contentType, compress)
-            end)
-            
-            if success then
-                callback(result)
-            else
-                callback(nil, result)
-            end
-        end
-        
-        return -- No return value for async with callback
-    else
-        -- If no callback, just use sync version
-        return game:HttpPost(url, data, contentType, compress)
-    end
-end
-
--- Create a combined loadstring + HttpGet utility function
-function loadUrl(url)
-    local content = game:HttpGet(url)
-    local fn, err = loadstring(content)
-    if not fn then
-        error("Failed to load URL: " .. tostring(err), 2)
-    end
-    return fn
-end
-
--- Return the implementations
-return {
-    HttpGet = function(...) return game:HttpGet(...) end,
-    HttpGetAsync = function(...) return game:HttpGetAsync(...) end,
-    HttpPost = function(...) return game:HttpPost(...) end,
-    HttpPostAsync = function(...) return game:HttpPostAsync(...) end,
-    loadUrl = loadUrl
 }
-)";
-    }
-    
-    // Check if HTTP requests are available
-    bool HttpClient::IsAvailable() {
-        @autoreleasepool {
-            // Check if we can create a session
-            NSURLSessionConfiguration* config = [NSURLSessionConfiguration defaultSessionConfiguration];
-            if (!config) {
-                return false;
-            }
-            
-            // Try creating a session
-            NSURLSession* session = [NSURLSession sessionWithConfiguration:config];
-            if (!session) {
-                return false;
-            }
-            
-            return true;
-        }
-    }
-
-} // namespace AdvancedBypass
-} // namespace iOS
+}
+#endif // __APPLE__

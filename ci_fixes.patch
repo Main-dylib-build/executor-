@@ -1,0 +1,35 @@
+diff --git a/source/cpp/memory/signature.hpp b/source/cpp/memory/signature.hpp
+index 7e6dea8..7d2d8e7 100644
+--- a/source/cpp/memory/signature.hpp
++++ b/source/cpp/memory/signature.hpp
+@@ -1,5 +1,6 @@
+ #pragma once
+ 
++#include <cstdint>
+ #include <string>
+ #include <vector>
+ 
+@@ -8,6 +9,13 @@
+ 
+ namespace Memory {
+ 
++    // Forward declaration or dummy implementation for CI builds
++#ifdef CI_BUILD
++    inline uintptr_t getLibBase(const char* name) {
++        (void)name;
++        return 0;
++    }
++#endif
+     // Signature scanning utility functions
+     namespace Signature {
+ 
+@@ -61,6 +69,9 @@ namespace Memory {
+ 
+         // Get Roblox function address by pattern
+         static uintptr_t GetAddressByPattern(const char* pattern) {
++            #ifdef CI_BUILD
++                return 0; // Skip in CI
++            #endif
+             // Get Roblox module info
+             uintptr_t base = getLibBase("libroblox.so");
+             if (!base) return 0;
